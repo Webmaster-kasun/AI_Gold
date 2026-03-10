@@ -1,0 +1,41 @@
+name: OANDA Hybrid CPR + Breakout Bot
+
+on:
+  schedule:
+    - cron: "*/5 21-23 * * 0"   # Sunday UTC (Mon SGT market open)
+    - cron: "*/5 * * * 1-4"     # Mon–Thu all day UTC
+    - cron: "*/5 0-21 * * 5"    # Friday until market close
+  workflow_dispatch:             # Manual trigger anytime
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Hybrid CPR Bot
+        env:
+          OANDA_API_KEY:    ${{ secrets.OANDA_API_KEY }}
+          OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID_2 }}
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
+
+      - name: Save logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hybrid-logs-${{ github.run_number }}
+          path: |
+            trades_*.json
+            performance_log.txt
+          retention-days: 30
