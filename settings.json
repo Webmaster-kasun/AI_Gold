@@ -1,0 +1,12 @@
+{
+  "max_trades_day": 5,
+  "max_daily_loss": 40.0,
+  "signal_threshold": 4,
+  "demo_mode": true,
+  "trade_gbpusd": true,
+  "trade_gold": true,
+  "max_consec_losses": 2,
+  "max_spread_pips": 2,
+  "max_spread_gold": 5,
+  "strategy": "hybrid_cpr_breakout"
+}
