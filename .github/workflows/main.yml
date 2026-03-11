@@ -2,16 +2,9 @@ name: OANDA Gold CPR Bot
 
 on:
   schedule:
-    # ── ASIAN SESSION: 5am–12pm SGT = 9pm–4am UTC ──
-    - cron: "*/10 21-23 * * 0"    # Sunday UTC (Mon SGT Asian open)
-    - cron: "*/10 21-23 * * 1-4"  # Mon–Thu 9pm–11pm UTC (5am–7am SGT)
-    - cron: "*/10 0-4 * * 1-5"    # Mon–Fri 12am–4am UTC (8am–12pm SGT)
-
-    # ── LONDON SESSION: 2pm–7pm SGT = 6am–11am UTC ──
-    - cron: "*/10 6-11 * * 1-5"   # Mon–Fri 6am–11am UTC
-
-    # ── NY OVERLAP: 8pm–11pm SGT = 12pm–3pm UTC ──
-    - cron: "*/10 12-15 * * 1-5"  # Mon–Fri 12pm–3pm UTC
+    # 9am–11pm SGT = 1am–3pm UTC  (SGT = UTC+8)
+    - cron: "*/10 1-14 * * 1-5"   # Mon–Fri 1am–2pm UTC (9am–10pm SGT)
+    - cron: "*/10 15 * * 1-5"     # Mon–Fri 3pm UTC (11pm SGT final window)
 
   workflow_dispatch:               # Manual trigger anytime
 
