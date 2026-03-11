@@ -160,8 +160,8 @@ class SignalEngine:
 
         broke_resistance = current_h4 > resistance and prev_h4 <= resistance
         broke_support    = current_h4 < support    and prev_h4 >= support
-        near_resistance  = abs(current_h4 - resistance) < atr_h4 * 0.3 and current_h4 > resistance
-        near_support     = abs(current_h4 - support)    < atr_h4 * 0.3 and current_h4 < support
+        near_resistance  = abs(current_h4 - resistance) < atr_h4 * 0.5 and current_h4 > resistance
+        near_support     = abs(current_h4 - support)    < atr_h4 * 0.5 and current_h4 < support
 
         # Extra bonus if CPR TC AND H4 resistance both broken (highest conviction setup)
         cpr_levels = self.cpr.get_levels("XAU_USD")
@@ -260,10 +260,10 @@ class SignalEngine:
         log.info("Gold Hybrid bull=" + str(bull) + " bear=" + str(bear))
         reason_str = " | ".join(reasons) if reasons else "No setup"
 
-        # Need 4 points minimum, clear directional edge
-        if bull >= 4 and bull > bear:
+        # Need 3 points minimum (relaxed for current volatile market)
+        if bull >= 3 and bull > bear:
             return min(bull, 8), "BUY", reason_str
-        elif bear >= 4 and bear > bull:
+        elif bear >= 3 and bear > bull:
             return min(bear, 8), "SELL", reason_str
         return max(bull, bear), "NONE", reason_str
 
@@ -424,13 +424,15 @@ class SignalEngine:
         log.info("Gold Asian bull=" + str(bull) + " bear=" + str(bear) + " ema_conflict=" + str(ema_conflict))
         reason_str = " | ".join(reasons) if reasons else "No setup"
 
-        # EMA conflict in Asian session blocks all entries (watch mode only)
+        # EMA conflict = reduce score by 1 (soft warning, not hard block)
+        # Previously was a hard block — relaxed for volatile market conditions
         if ema_conflict:
-            return max(bull, bear), "NONE", reason_str
+            adjusted = max(max(bull, bear) - 1, 0)
+            return adjusted, "NONE", reason_str
 
-        if bull >= 3 and bull > bear:
+        if bull >= 2 and bull > bear:
             return min(bull, 8), "BUY", reason_str
-        elif bear >= 3 and bear > bull:
+        elif bear >= 2 and bear > bull:
             return min(bear, 8), "SELL", reason_str
         return max(bull, bear), "NONE", reason_str
 
