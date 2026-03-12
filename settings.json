@@ -7,7 +7,7 @@
   "trade_gold": true,
   "trade_gold_asian": true,
   "max_consec_losses": 2,
-  "max_spread_gold": 25,
-  "max_spread_gold_asian": 35,
+  "max_spread_gold": 100,
+  "max_spread_gold_asian": 100,
   "strategy": "hybrid_cpr_breakout_gold"
 }
