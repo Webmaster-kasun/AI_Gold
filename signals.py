@@ -122,50 +122,52 @@ class SignalEngine:
         else:
             reasons.append("❌ EMA: not enough H1 data")
 
-        # ── CHECK 3: VOLUME CONFIRMATION (0–1 pt) ─────────────
-        vol_checked = False
-        if len(h1_vols) >= 20:
-            avg_vol = sum(h1_vols[-20:-1]) / 19
-            cur_vol = h1_vols[-1]
-            ratio   = round(cur_vol / avg_vol, 2) if avg_vol > 0 else 0
-            log.info("Gold H1 volume ratio=" + str(ratio))
-            if ratio >= 1.2:
-                score += 1
-                reasons.append("✅ Volume confirmed (ratio:" + str(ratio) + "x) (1 pt)")
+        # ── CHECK 3: RSI CONFIRMATION (0–1 pt) ────────────────
+        # RSI > 55 confirms BUY momentum, RSI < 45 confirms SELL momentum
+        # Uses H1 candles, period 14 — reliable and always available
+        rsi_val = None
+        if len(h1_closes) >= 15:
+            deltas = [h1_closes[i] - h1_closes[i-1] for i in range(1, len(h1_closes))]
+            gains  = [d if d > 0 else 0 for d in deltas[-14:]]
+            losses = [-d if d < 0 else 0 for d in deltas[-14:]]
+            avg_gain = sum(gains) / 14
+            avg_loss = sum(losses) / 14
+            if avg_loss == 0:
+                rsi_val = 100.0
             else:
-                reasons.append("❌ Volume low (ratio:" + str(ratio) + "x) need 1.2x (0 pts)")
-            vol_checked = True
+                rs      = avg_gain / avg_loss
+                rsi_val = round(100 - (100 / (1 + rs)), 1)
+            log.info("Gold RSI=" + str(rsi_val))
 
-        if not vol_checked and len(m15_vols) >= 20:
-            avg_vol = sum(m15_vols[-20:-1]) / 19
-            cur_vol = m15_vols[-1]
-            ratio   = round(cur_vol / avg_vol, 2) if avg_vol > 0 else 0
-            if ratio >= 1.2:
+            if direction == "BUY" and rsi_val > 55:
                 score += 1
-                reasons.append("✅ Volume confirmed M15 (ratio:" + str(ratio) + "x) (1 pt)")
+                reasons.append("✅ RSI=" + str(rsi_val) + " > 55 — bullish momentum (1 pt)")
+            elif direction == "SELL" and rsi_val < 45:
+                score += 1
+                reasons.append("✅ RSI=" + str(rsi_val) + " < 45 — bearish momentum (1 pt)")
             else:
-                reasons.append("❌ Volume low M15 (ratio:" + str(ratio) + "x) (0 pts)")
+                reasons.append("❌ RSI=" + str(rsi_val) + " — no momentum confirmation (0 pts)")
+        else:
+            reasons.append("❌ RSI: not enough data (0 pts)")
 
-        # ── CHECK 4: PDH/PDL (0–1 pt) ─────────────────────────
-        d1_closes, d1_highs, d1_lows, _, _ = self._fetch_candles("XAU_USD", "D", 3)
-        if len(d1_highs) >= 2:
-            pdh = d1_highs[-2]
-            pdl = d1_lows[-2]
-            log.info("Gold PDH=" + str(round(pdh, 2)) + " PDL=" + str(round(pdl, 2)))
-
-            if direction == "BUY" and price >= pdh * 0.9985:
-                score += 1
-                reasons.append("✅ Price near/above PDH=" + str(round(pdh, 2)) + " (1 pt)")
-            elif direction == "SELL" and price <= pdl * 1.0015:
-                score += 1
-                reasons.append("✅ Price near/below PDL=" + str(round(pdl, 2)) + " (1 pt)")
-            else:
-                reasons.append("❌ PDH/PDL: inside prior range (0 pts)")
-
+        # ── CHECK 4: CPR WIDTH BONUS (0–1 pt) ─────────────────
+        # Narrow CPR = trending day = higher confidence in breakout
+        # Wide CPR = choppy = skip bonus point
+        if cpr.get("is_narrow"):
+            score += 1
             reasons.append(
-                "PDH=" + str(round(pdh, 2)) + " PDL=" + str(round(pdl, 2)) +
-                " R1=" + str(r1) + " S1=" + str(s1)
+                "✅ Narrow CPR=" + str(cpr["width_pct"]) + "% — trending day bonus (1 pt)"
             )
+        elif cpr.get("is_wide"):
+            reasons.append(
+                "❌ Wide CPR=" + str(cpr["width_pct"]) + "% — choppy day, no bonus (0 pts)"
+            )
+        else:
+            reasons.append(
+                "❌ Normal CPR=" + str(cpr["width_pct"]) + "% — no bonus (0 pts)"
+            )
+
+        reasons.append("R1=" + str(r1) + " S1=" + str(s1))
 
         log.info("Gold final score=" + str(score) + " direction=" + direction)
         reason_str = " | ".join(reasons)
@@ -224,35 +226,40 @@ class SignalEngine:
             else:
                 reasons.append("❌ EMA vs CPR mismatch (0 pts)")
 
-        # CHECK 3: Volume
-        if len(h1_vols) >= 20:
-            avg_vol = sum(h1_vols[-20:-1]) / 19
-            cur_vol = h1_vols[-1]
-            ratio   = round(cur_vol / avg_vol, 2) if avg_vol > 0 else 0
-            if ratio >= 1.1:
-                score += 1
-                reasons.append("✅ Volume confirmed (ratio:" + str(ratio) + "x) (1 pt)")
+        # CHECK 3: RSI
+        rsi_val = None
+        if len(h1_closes) >= 15:
+            deltas = [h1_closes[i] - h1_closes[i-1] for i in range(1, len(h1_closes))]
+            gains  = [d if d > 0 else 0 for d in deltas[-14:]]
+            losses = [-d if d < 0 else 0 for d in deltas[-14:]]
+            avg_gain = sum(gains) / 14
+            avg_loss = sum(losses) / 14
+            if avg_loss == 0:
+                rsi_val = 100.0
             else:
-                reasons.append("❌ Volume low (ratio:" + str(ratio) + "x) (0 pts)")
+                rs      = avg_gain / avg_loss
+                rsi_val = round(100 - (100 / (1 + rs)), 1)
+            log.info("Gold Asian RSI=" + str(rsi_val))
 
-        # CHECK 4: PDH/PDL
-        d1_closes, d1_highs, d1_lows, _, _ = self._fetch_candles("XAU_USD", "D", 3)
-        if len(d1_highs) >= 2:
-            pdh = d1_highs[-2]
-            pdl = d1_lows[-2]
-            if direction == "BUY" and price >= pdh * 0.999:
+            if direction == "BUY" and rsi_val > 52:
                 score += 1
-                reasons.append("✅ Near/above PDH=" + str(round(pdh, 2)) + " (1 pt)")
-            elif direction == "SELL" and price <= pdl * 1.001:
+                reasons.append("✅ RSI=" + str(rsi_val) + " > 52 — bullish (1 pt)")
+            elif direction == "SELL" and rsi_val < 48:
                 score += 1
-                reasons.append("✅ Near/below PDL=" + str(round(pdl, 2)) + " (1 pt)")
+                reasons.append("✅ RSI=" + str(rsi_val) + " < 48 — bearish (1 pt)")
             else:
-                reasons.append("❌ Inside PDH/PDL range (0 pts)")
+                reasons.append("❌ RSI=" + str(rsi_val) + " — neutral (0 pts)")
+        else:
+            reasons.append("❌ RSI: not enough data (0 pts)")
 
-            reasons.append(
-                "PDH=" + str(round(pdh, 2)) + " PDL=" + str(round(pdl, 2)) +
-                " R1=" + str(cpr["r1"]) + " S1=" + str(cpr["s1"])
-            )
+        # CHECK 4: CPR Width bonus
+        if cpr.get("is_narrow"):
+            score += 1
+            reasons.append("✅ Narrow CPR=" + str(cpr["width_pct"]) + "% — trending (1 pt)")
+        else:
+            reasons.append("❌ CPR=" + str(cpr["width_pct"]) + "% — no bonus (0 pts)")
+
+        reasons.append("R1=" + str(cpr["r1"]) + " S1=" + str(cpr["s1"]))
 
         log.info("Gold Asian score=" + str(score) + " direction=" + direction)
         reason_str = " | ".join(reasons)
