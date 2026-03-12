@@ -169,10 +169,8 @@ class SignalEngine:
 
         log.info("Gold final score=" + str(score) + " direction=" + direction)
         reason_str = " | ".join(reasons)
-
-        if score >= 3 and direction != "NONE":
-            return score, direction, reason_str
-        return score, "NONE", reason_str
+        # Return raw score — bot.py applies threshold, not signals.py
+        return score, direction, reason_str
 
     # ══════════════════════════════════════════════════════════
     # ASIAN SESSION ANALYSIS — same checks, lower threshold
@@ -258,10 +256,8 @@ class SignalEngine:
 
         log.info("Gold Asian score=" + str(score) + " direction=" + direction)
         reason_str = " | ".join(reasons)
-
-        if score >= 2 and direction != "NONE":
-            return score, direction, reason_str
-        return score, "NONE", reason_str
+        # Return raw score — bot.py applies threshold, not signals.py
+        return score, direction, reason_str
 
     # ══════════════════════════════════════
     # HELPERS
