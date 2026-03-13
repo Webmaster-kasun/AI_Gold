@@ -392,15 +392,18 @@ def run_bot():
 
     consec = today.get("consec_losses", 0)
     if consec >= settings.get("max_consec_losses", 2):
-        today["stopped"] = True
+        # Apply 30min cooling period instead of stopping all day
+        alert.send(
+            "⚠️ GOLD BOT: " + str(consec) + " CONSECUTIVE LOSSES!\n"
+            "30 min cooling period activated.\n"
+            "Realized: $" + str(round(realized_pnl, 2)) + " USD\n"
+            "Will resume after cooldown."
+        )
+        for _n in ASSETS:
+            today.setdefault("cooldowns", {})[_n] = datetime.utcnow().isoformat()
+        today["consec_losses"] = 0  # reset after cooling period applied
         with open(trade_log, "w") as f:
             json.dump(today, f, indent=2)
-        alert.send(
-            "⛔ GOLD BOT: " + str(consec) + " CONSECUTIVE LOSSES!\n"
-            "Capital protection activated!\n"
-            "Realized: $" + str(round(realized_pnl, 2)) + " USD\n"
-            "Resumes tomorrow!"
-        )
         return
 
     if today["trades"] >= settings["max_trades_day"]:
@@ -499,7 +502,11 @@ def run_bot():
 
         # Cooldown check
         if is_in_cooldown(today, name):
-            scan_results.append(config["emoji"] + " " + name + ": cooldown 10min")
+            cooldowns = today.get("cooldowns", {})
+            last_loss = datetime.fromisoformat(cooldowns[name])
+            wait_until = last_loss + timedelta(minutes=10)
+            mins_left = max(1, int((wait_until - datetime.utcnow()).seconds / 60))
+            scan_results.append(config["emoji"] + " " + name + ": ⏳ cooldown " + str(mins_left) + "min left")
             continue
 
         # Spread check
