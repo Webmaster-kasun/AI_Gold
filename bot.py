@@ -217,64 +217,143 @@ def set_cooldown(today, instrument):
     today["cooldowns"][instrument] = datetime.utcnow().isoformat()
 
 
-def manage_breakeven(trader, instrument, config, today, trade_log):
+def manage_trailing_sl(trader, instrument, config, today, trade_log):
     """
-    Breakeven stop management:
-    If open PnL >= 1x ATR value -> move SL to entry price.
-    Only triggers once per trade (tracked in today log).
+    3-Level Trailing SL — auto-adjusts every scan based on progress toward TP.
+
+    Level 1 — 25% of TP reached → move SL to entry (breakeven, $0 risk)
+    Level 2 — 50% of TP reached → move SL to lock 25% of TP profit
+    Level 3 — 75% of TP reached → move SL to lock 50% of TP profit
+
+    SL only ever moves in your favour — never backward.
+    Runs every 5 min via Railway scan automatically.
     """
-    be_key = "breakeven_" + instrument
-    if today.get(be_key):
-        return  # Already set breakeven for this trade
+    try:
+        url = trader.base_url + "/v3/accounts/" + trader.account_id + "/openTrades"
+        r   = requests.get(url, headers=trader.headers, timeout=10)
+        if r.status_code != 200:
+            return False
 
-    position = trader.get_position(instrument)
-    if not position:
-        return
+        open_trades = r.json().get("trades", [])
+        fired       = False
 
-    pnl = trader.check_pnl(position)
+        for trade in open_trades:
+            if trade.get("instrument") != instrument:
+                continue
 
-    # Get 1x ATR value in USD
-    atr_pips = get_atr_pips(trader, instrument, config["pip"], multiplier=1.0)
-    if not atr_pips:
-        return
+            trade_id    = trade["id"]
+            entry_price = float(trade["price"])
+            precision   = config["precision"]
+            units       = float(trade.get("currentUnits", trade.get("initialUnits", 0)))
+            direction   = "BUY" if units > 0 else "SELL"
 
-    atr_usd = atr_pips * config["pip"] * config["lot_size"]
+            # Get current TP distance from the trade's takeProfit order
+            tp_order    = trade.get("takeProfitOrder", {})
+            tp_price    = float(tp_order.get("price", 0)) if tp_order else 0
+            if not tp_price:
+                continue
 
-    if pnl >= atr_usd:
-        try:
-            url = trader.base_url + "/v3/accounts/" + trader.account_id + "/openTrades"
-            r   = requests.get(url, headers=trader.headers, timeout=10)
-            if r.status_code != 200:
-                return
+            tp_dist_pips = abs(tp_price - entry_price) / config["pip"]
 
-            trades = r.json().get("trades", [])
-            for trade in trades:
-                if trade.get("instrument") != instrument:
-                    continue
+            # Get current price
+            current_price, _, _ = trader.get_price(instrument)
+            if not current_price:
+                continue
 
-                trade_id    = trade["id"]
-                entry_price = float(trade["price"])
-                precision   = config["precision"]
+            # Progress toward TP (0.0 = entry, 1.0 = TP)
+            if direction == "BUY":
+                progress = (current_price - entry_price) / (tp_price - entry_price)
+            else:
+                progress = (entry_price - current_price) / (entry_price - tp_price)
 
-                patch_url  = trader.base_url + "/v3/accounts/" + trader.account_id + "/trades/" + trade_id + "/orders"
-                patch_data = {
-                    "stopLoss": {
-                        "price":       str(round(entry_price, precision)),
-                        "timeInForce": "GTC"
-                    }
+            progress = max(0.0, progress)
+
+            # Current SL from trade
+            sl_order     = trade.get("stopLossOrder", {})
+            current_sl   = float(sl_order.get("price", 0)) if sl_order else 0
+
+            # Calculate new SL targets for each level
+            # Level 1: breakeven = entry
+            sl_level1 = entry_price
+
+            # Level 2: lock 25% of TP distance as profit
+            if direction == "BUY":
+                sl_level2 = entry_price + (tp_price - entry_price) * 0.25
+                sl_level3 = entry_price + (tp_price - entry_price) * 0.50
+            else:
+                sl_level2 = entry_price - (entry_price - tp_price) * 0.25
+                sl_level3 = entry_price - (entry_price - tp_price) * 0.50
+
+            # Determine which level to apply
+            new_sl      = None
+            level_label = None
+
+            if progress >= 0.75:
+                candidate = round(sl_level3, precision)
+                # Only move SL if it improves (closer to TP than current)
+                if direction == "BUY" and (not current_sl or candidate > current_sl):
+                    new_sl = candidate
+                    level_label = "Level 3 — 50% profit locked"
+                elif direction == "SELL" and (not current_sl or candidate < current_sl):
+                    new_sl = candidate
+                    level_label = "Level 3 — 50% profit locked"
+
+            elif progress >= 0.50:
+                candidate = round(sl_level2, precision)
+                if direction == "BUY" and (not current_sl or candidate > current_sl):
+                    new_sl = candidate
+                    level_label = "Level 2 — 25% profit locked"
+                elif direction == "SELL" and (not current_sl or candidate < current_sl):
+                    new_sl = candidate
+                    level_label = "Level 2 — 25% profit locked"
+
+            elif progress >= 0.25:
+                candidate = round(sl_level1, precision)
+                if direction == "BUY" and (not current_sl or candidate > current_sl):
+                    new_sl = candidate
+                    level_label = "Level 1 — breakeven"
+                elif direction == "SELL" and (not current_sl or candidate < current_sl):
+                    new_sl = candidate
+                    level_label = "Level 1 — breakeven"
+
+            if new_sl is None:
+                log.info(instrument + " trailing SL: progress=" + str(round(progress*100)) + "% — no adjustment yet")
+                continue
+
+            # Apply new SL via OANDA API
+            patch_url  = trader.base_url + "/v3/accounts/" + trader.account_id + "/trades/" + trade_id + "/orders"
+            patch_data = {
+                "stopLoss": {
+                    "price":       str(new_sl),
+                    "timeInForce": "GTC"
                 }
-                pr = requests.put(patch_url, headers=trader.headers, json=patch_data, timeout=10)
-                if pr.status_code == 200:
-                    today[be_key] = True
-                    with open(trade_log, "w") as f:
-                        json.dump(today, f, indent=2)
-                    log.info(instrument + " BREAKEVEN set at " + str(round(entry_price, precision)))
-                    return True
+            }
+            pr = requests.put(patch_url, headers=trader.headers, json=patch_data, timeout=10)
+            if pr.status_code == 200:
+                log.info(instrument + " trailing SL updated to " + str(new_sl) + " (" + level_label + ")")
+                # Store in today log for Telegram alert
+                today["trailing_sl_" + instrument] = {
+                    "level": level_label,
+                    "new_sl": new_sl,
+                    "progress_pct": round(progress * 100),
+                    "direction": direction
+                }
+                with open(trade_log, "w") as f:
+                    json.dump(today, f, indent=2)
+                fired = True
+            else:
+                log.warning(instrument + " trailing SL update failed: " + str(pr.status_code))
 
-        except Exception as e:
-            log.warning("Breakeven error: " + str(e))
+        return fired
 
-    return False
+    except Exception as e:
+        log.warning("Trailing SL error: " + str(e))
+        return False
+
+
+def manage_breakeven(trader, instrument, config, today, trade_log):
+    """Kept for compatibility — delegates to manage_trailing_sl"""
+    return manage_trailing_sl(trader, instrument, config, today, trade_log)
 
 
 def run_bot():
@@ -425,15 +504,22 @@ def run_bot():
         log.info("Off-hours (11pm–9am SGT) — sleeping silently")
         return
 
-    # ── BREAKEVEN MANAGEMENT ──────────────────────────────────
+    # ── TRAILING SL MANAGEMENT ────────────────────────────────
     for name, config in ASSETS.items():
-        be_result = manage_breakeven(trader, name, config, today, trade_log)
-        if be_result:
+        tsl_result = manage_trailing_sl(trader, name, config, today, trade_log)
+        if tsl_result:
+            tsl_info = today.get("trailing_sl_" + name, {})
+            level    = tsl_info.get("level", "SL adjusted")
+            new_sl   = tsl_info.get("new_sl", "")
+            prog     = tsl_info.get("progress_pct", "")
+            position = trader.get_position(name)
+            open_pnl = round(trader.check_pnl(position), 2) if position else 0
             alert.send(
-                "🔒 BREAKEVEN SET — " + config["emoji"] + " " + name + "\n"
-                "SL moved to entry price!\n"
-                "Trade is now risk-free 🎯\n"
-                "Open PnL: $" + str(round(trader.check_pnl(trader.get_position(name)), 2))
+                "🔒 TRAILING SL — " + config["emoji"] + " " + name + "\n"
+                + level + "\n"
+                "New SL: " + str(new_sl) + "\n"
+                "Progress: " + str(prog) + "% toward TP\n"
+                "Open PnL: $" + str(open_pnl)
             )
 
     # ── NEWS WARNING ──────────────────────────────────────────
@@ -550,12 +636,12 @@ def run_bot():
         raw_atr     = get_atr_pips(trader, name, config["pip"], multiplier=1.0)
 
         if raw_atr:
-            stop_pips = max(150, min(raw_atr, 500))   # clamp 150–500
-            tp_pips   = stop_pips * 2                  # always 1:2
+            stop_pips = max(800, min(raw_atr, 1600))   # clamp 800–1600 (Gold real range)
+            tp_pips   = stop_pips * 2                   # always 1:2
             tp_label  = "2x ATR (1:2 R:R)"
         else:
-            stop_pips = 200   # fallback
-            tp_pips   = 400
+            stop_pips = 800    # fallback
+            tp_pips   = 1600
             tp_label  = "Fixed fallback (1:2 R:R)"
 
         max_loss   = round(size * stop_pips * config["pip"], 2)
