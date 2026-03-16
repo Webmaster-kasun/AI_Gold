@@ -636,13 +636,13 @@ def run_bot():
         raw_atr     = get_atr_pips(trader, name, config["pip"], multiplier=1.0)
 
         if raw_atr:
-            stop_pips = max(800, min(raw_atr, 1600))   # clamp 800–1600 (Gold real range)
-            tp_pips   = stop_pips * 2                   # always 1:2
-            tp_label  = "2x ATR (1:2 R:R)"
+            stop_pips = max(600, min(raw_atr, 600))    # fixed 600p — survives Gold noise
+            tp_pips   = stop_pips * 3                   # always 1:3 R:R = 1800p
+            tp_label  = "3x SL (1:3 R:R)"
         else:
-            stop_pips = 800    # fallback
-            tp_pips   = 1600
-            tp_label  = "Fixed fallback (1:2 R:R)"
+            stop_pips = 600    # fallback
+            tp_pips   = 1800
+            tp_label  = "Fixed fallback (1:3 R:R)"
 
         max_loss   = round(size * stop_pips * config["pip"], 2)
         max_profit = round(size * tp_pips   * config["pip"], 2)
