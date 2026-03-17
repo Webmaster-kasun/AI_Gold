@@ -635,9 +635,9 @@ def run_bot():
         raw_atr     = get_atr_pips(trader, name, config["pip"], multiplier=1.0)
 
         if raw_atr:
-            stop_pips = max(500, min(raw_atr, 800))    # clamp ATR: min 500p, max 800p
-            tp_pips   = stop_pips * 3                   # 1:3 R:R always
-            tp_label  = "3x ATR (1:3 R:R)"
+            stop_pips = max(500, min(raw_atr, 600))    # SL: 500–600p
+            tp_pips   = min(stop_pips * 3, 1800)        # TP: max 1800p always
+            tp_label  = "3x SL capped 1800p (1:3 R:R)"
         else:
             stop_pips = 600    # fallback
             tp_pips   = 1800
