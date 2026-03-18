@@ -66,8 +66,8 @@ def load_settings():
     default = {
         "max_trades_day":         5,
         "max_daily_loss":         74.0,    # ~$100 SGD
-        "signal_threshold":       4,       # 4/5 pts minimum (London/NY)
-        "signal_threshold_asian": 3,       # 3/5 pts minimum (Asian)
+        "signal_threshold":       5,       # 5/7 pts minimum (London/NY)
+        "signal_threshold_asian": 4,       # 4/7 pts minimum (Asian)
         "demo_mode":              True,
         "trade_gold":             True,
         "trade_gold_asian":       True,
@@ -145,6 +145,14 @@ def sync_closed_trades(trader, today, trade_log):
         with open(trade_log, "w") as f:
             import json
             json.dump(today, f, indent=2)
+        # Track last closed trade for smart re-entry logic
+        today_closed = [t for t in trades if t.get("closeTime","") >= day_start_utc]
+        if today_closed:
+            latest = sorted(today_closed, key=lambda x: x.get("closeTime",""))[-1]
+            today["last_trade_close_time"]   = latest.get("closeTime","")
+            today["last_trade_close_result"] = "WIN" if float(latest.get("realizedPL",0)) > 0 else "LOSS"
+            today["last_trade_entry_price"]  = float(latest.get("price", today.get("last_trade_entry_price") or 0))
+
         log.info("Synced " + str(trade_count + open_count) + " trades (closed=" + str(trade_count) + " open=" + str(open_count) + ") W=" + str(wins) + " L=" + str(losses))
     except Exception as e:
         log.warning("Sync trades error: " + str(e))
@@ -200,148 +208,6 @@ def check_spread(trader, instrument, max_spread_pips, pip):
 # Cooldown functions removed — bot trades freely on signal score alone
 
 
-def manage_trailing_sl(trader, instrument, config, today, trade_log):
-    """
-    3-Level Trailing SL — auto-adjusts every scan based on progress toward TP.
-
-    Level 1 — 25% of TP reached → move SL to entry (breakeven, $0 risk)
-    Level 2 — 50% of TP reached → move SL to lock 25% of TP profit
-    Level 3 — 75% of TP reached → move SL to lock 50% of TP profit
-
-    SL only ever moves in your favour — never backward.
-    Runs every 5 min via Railway scan automatically.
-    """
-    try:
-        url = trader.base_url + "/v3/accounts/" + trader.account_id + "/openTrades"
-        r   = requests.get(url, headers=trader.headers, timeout=10)
-        if r.status_code != 200:
-            return False
-
-        open_trades = r.json().get("trades", [])
-        fired       = False
-
-        for trade in open_trades:
-            if trade.get("instrument") != instrument:
-                continue
-
-            trade_id    = trade["id"]
-            entry_price = float(trade["price"])
-            precision   = config["precision"]
-            units       = float(trade.get("currentUnits", trade.get("initialUnits", 0)))
-            direction   = "BUY" if units > 0 else "SELL"
-
-            # Get current TP distance from the trade's takeProfit order
-            tp_order    = trade.get("takeProfitOrder", {})
-            tp_price    = float(tp_order.get("price", 0)) if tp_order else 0
-            if not tp_price:
-                continue
-
-            tp_dist_pips = abs(tp_price - entry_price) / config["pip"]
-
-            # Get current price
-            current_price, _, _ = trader.get_price(instrument)
-            if not current_price:
-                continue
-
-            # Progress toward TP (0.0 = entry, 1.0 = TP)
-            if direction == "BUY":
-                progress = (current_price - entry_price) / (tp_price - entry_price)
-            else:
-                progress = (entry_price - current_price) / (entry_price - tp_price)
-
-            progress = max(0.0, progress)
-
-            # Current SL from trade
-            sl_order     = trade.get("stopLossOrder", {})
-            current_sl   = float(sl_order.get("price", 0)) if sl_order else 0
-
-            # Calculate new SL targets for each level
-            # Level 1: breakeven = entry
-            sl_level1 = entry_price
-
-            # Level 2: lock 25% of TP distance as profit
-            if direction == "BUY":
-                sl_level2 = entry_price + (tp_price - entry_price) * 0.25
-                sl_level3 = entry_price + (tp_price - entry_price) * 0.50
-            else:
-                sl_level2 = entry_price - (entry_price - tp_price) * 0.25
-                sl_level3 = entry_price - (entry_price - tp_price) * 0.50
-
-            # Determine which level to apply
-            new_sl      = None
-            level_label = None
-
-            if progress >= 0.75:
-                candidate = round(sl_level3, precision)
-                # Only move SL if it improves (closer to TP than current)
-                if direction == "BUY" and (not current_sl or candidate > current_sl):
-                    new_sl = candidate
-                    level_label = "Level 3 — 50% profit locked"
-                elif direction == "SELL" and (not current_sl or candidate < current_sl):
-                    new_sl = candidate
-                    level_label = "Level 3 — 50% profit locked"
-
-            elif progress >= 0.50:
-                candidate = round(sl_level2, precision)
-                if direction == "BUY" and (not current_sl or candidate > current_sl):
-                    new_sl = candidate
-                    level_label = "Level 2 — 25% profit locked"
-                elif direction == "SELL" and (not current_sl or candidate < current_sl):
-                    new_sl = candidate
-                    level_label = "Level 2 — 25% profit locked"
-
-            elif progress >= 0.25:
-                candidate = round(sl_level1, precision)
-                if direction == "BUY" and (not current_sl or candidate > current_sl):
-                    new_sl = candidate
-                    level_label = "Level 1 — breakeven"
-                elif direction == "SELL" and (not current_sl or candidate < current_sl):
-                    new_sl = candidate
-                    level_label = "Level 1 — breakeven"
-
-            if new_sl is None:
-                log.info(instrument + " trailing SL: progress=" + str(round(progress*100)) + "% — no adjustment yet")
-                continue
-
-            # Apply new SL via OANDA API
-            patch_url  = trader.base_url + "/v3/accounts/" + trader.account_id + "/trades/" + trade_id + "/orders"
-            patch_data = {
-                "stopLoss": {
-                    "price":       str(new_sl),
-                    "timeInForce": "GTC"
-                }
-            }
-            pr = requests.put(patch_url, headers=trader.headers, json=patch_data, timeout=10)
-            if pr.status_code == 200:
-                log.info(instrument + " trailing SL updated to " + str(new_sl) + " (" + level_label + ")")
-                prev_info  = today.get("trailing_sl_" + instrument, {})
-                prev_level = prev_info.get("level", "")
-                # Only fire Telegram if level actually changed
-                level_changed = (level_label != prev_level)
-                today["trailing_sl_" + instrument] = {
-                    "level":        level_label,
-                    "new_sl":       new_sl,
-                    "progress_pct": round(progress * 100),
-                    "direction":    direction,
-                    "alerted":      level_changed
-                }
-                with open(trade_log, "w") as f:
-                    json.dump(today, f, indent=2)
-                if level_changed:
-                    fired = True
-            else:
-                log.warning(instrument + " trailing SL update failed: " + str(pr.status_code))
-
-        return fired
-
-    except Exception as e:
-        log.warning("Trailing SL error: " + str(e))
-        return False
-
-
-def manage_breakeven(trader, instrument, config, today, trade_log):
-    """Kept for compatibility — delegates to manage_trailing_sl"""
-    return manage_trailing_sl(trader, instrument, config, today, trade_log)
 
 
 def run_bot():
@@ -408,7 +274,10 @@ def run_bot():
             "cooldowns":           {},
             "cpr_alert_sent":       False,
             "cpr_alert_asian_sent":  False,
-            "news_alert_sent":       False,
+            "news_alert_sent":        False,
+            "last_trade_close_time":  None,
+            "last_trade_close_result": None,
+            "last_trade_entry_price":  None,
         }
         with open(trade_log, "w") as f:
             json.dump(today, f, indent=2)
@@ -494,29 +363,7 @@ def run_bot():
         log.info("Off-hours (11pm–9am SGT) — sleeping silently")
         return
 
-    # ── TRAILING SL MANAGEMENT ────────────────────────────────
-    for name, config in ASSETS.items():
-        tsl_result = manage_trailing_sl(trader, name, config, today, trade_log)
-        if tsl_result:
-            tsl_info = today.get("trailing_sl_" + name, {})
-            # Only alert if level actually changed (alerted=True set in manage_trailing_sl)
-            if tsl_info.get("alerted"):
-                level    = tsl_info.get("level", "SL adjusted")
-                new_sl   = tsl_info.get("new_sl", "")
-                prog     = tsl_info.get("progress_pct", "")
-                position = trader.get_position(name)
-                open_pnl = round(trader.check_pnl(position), 2) if position else 0
-                alert.send(
-                    "🔒 TRAILING SL — " + config["emoji"] + " " + name + "\n"
-                    + level + "\n"
-                    "New SL: " + str(new_sl) + "\n"
-                    "Progress: " + str(prog) + "% toward TP\n"
-                    "Open PnL: $" + str(open_pnl)
-                )
-                # Reset alerted so it doesn't fire again for same level
-                today["trailing_sl_" + name]["alerted"] = False
-                with open(trade_log, "w") as f:
-                    json.dump(today, f, indent=2)
+    # Fixed SL/TP — OANDA manages trade automatically after entry
 
     # ── NEWS WARNING (once per day only) ─────────────────────
     calendar     = EconomicCalendar()
@@ -563,7 +410,48 @@ def run_bot():
             scan_results.append(config["emoji"] + " " + name + ": Asian session disabled")
             continue
 
-        # Cooldown removed — bot trades freely based on signals
+        # ── SMART RE-ENTRY GUARD ─────────────────────────────
+        # Data from 32 trades proves:
+        #   < 30 min gap  = 8% win rate  (LOSING)
+        #   >= 30 min gap = 26% win rate (PROFITABLE)
+        #   < 500p price diff from last entry = 0% win rate
+        #   >= 500p price diff = 27% win rate
+        # Both conditions must pass before next trade allowed.
+        last_close_time   = today.get("last_trade_close_time")
+        last_close_result = today.get("last_trade_close_result")
+        last_entry_price  = today.get("last_trade_entry_price") or 0
+
+        if last_close_time:
+            try:
+                close_dt   = datetime.strptime(last_close_time[:16].replace("T"," "), "%Y-%m-%d %H:%M")
+                now_utc    = datetime.utcnow()
+                mins_since = (now_utc - close_dt).total_seconds() / 60
+
+                # Rule 1 — Time gate (30 min mandatory)
+                if mins_since < 30:
+                    remaining = int(30 - mins_since)
+                    result_label = "after " + (last_close_result or "trade")
+                    scan_results.append(
+                        config["emoji"] + " " + name + ": ⏳ " + str(remaining) +
+                        "min cooldown " + result_label + " (market settling)"
+                    )
+                    continue
+
+                # Rule 2 — Price zone gate (500p from last entry)
+                if last_entry_price:
+                    mid_price, _, _ = trader.get_price(name)
+                    if mid_price:
+                        price_diff = abs(mid_price - last_entry_price) / config["pip"]
+                        if price_diff < 500:
+                            needed = int(500 - price_diff)
+                            scan_results.append(
+                                config["emoji"] + " " + name + ": 🔲 Same zone — need " +
+                                str(needed) + "p more movement (current diff=" +
+                                str(int(price_diff)) + "p, need 500p)"
+                            )
+                            continue
+            except Exception as e:
+                log.warning("Re-entry guard error: " + str(e))
 
         # Spread check
         if is_asian_gold:
@@ -602,7 +490,7 @@ def run_bot():
             cpr_lvls  = cpr_calc.get_levels("XAU_USD")
             watch_msg = (
                 "⏳ GOLD Asian Session — Watching for Breakout\n"
-                "Score: " + str(score) + "/5 — need " + str(threshold) + " to trade\n"
+                "Score: " + str(score) + "/7 — need " + str(threshold) + " to trade\n"
                 "CPR Width: "
             )
             if cpr_lvls:
@@ -619,7 +507,7 @@ def run_bot():
 
         if score < threshold or direction == "NONE":
             scan_results.append(
-                config["emoji"] + " " + name + ": " + str(score) + "/5 — no setup yet"
+                config["emoji"] + " " + name + ": " + str(score) + "/7 — no setup yet"
             )
             continue
 
@@ -656,9 +544,10 @@ def run_bot():
         )
 
         if result["success"]:
-            today["trades"]           += 1
-            today["consec_losses"]     = 0
-            today["breakeven_" + name] = False
+            today["trades"]                  += 1
+            today["consec_losses"]            = 0
+            today["breakeven_" + name]        = False
+            today["last_trade_entry_price"]   = price   # save for zone check
 
             with open(trade_log, "w") as f:
                 json.dump(today, f, indent=2)
@@ -679,7 +568,7 @@ def run_bot():
                 + config["emoji"] + " " + name + "\n"
                 "Strategy: CPR + Breakout Momentum\n"
                 "Direction: " + direction + "\n"
-                "Score:    " + str(score) + "/5\n"
+                "Score:    " + str(score) + "/7\n"
                 "Entry:    " + str(round(price, config["precision"])) + "\n"
                 "Size:     " + str(size) + " units" + size_note + "\n"
                 "Stop:     " + str(stop_pips) + " pips = $" + str(max_loss) + "\n"
@@ -733,20 +622,33 @@ def run_bot():
 
     threshold_used = settings.get("signal_threshold_asian", 2) if asian else settings["signal_threshold"]
 
-    alert.send(
-        "🥇 GOLD BOT Scan! " + mode + "\n"
-        "Time: " + now.strftime("%H:%M SGT") + " | " + session + "\n"
-        "Balance: $" + str(round(current_balance, 2)) +
-        " | Realized: $" + str(round(realized_pnl, 2)) + " " + pnl_emoji + "\n"
-        "Trades: " + str(today["trades"]) + "/" + str(settings["max_trades_day"]) +
-        " | W/L: " + str(wins) + "/" + str(losses) + "\n"
-        "Need: " + str(threshold_used) + "/5 to trade\n"
-        + target_msg + "\n"
-        "─────────────────────────\n"
-        + cpr_line +
-        "─── Setups ───\n"
-        + summary
-    )
+    # Send scan summary every 30 min OR instantly when trade placed
+    trade_just_placed = any("PLACED" in r for r in scan_results)
+    last_alert_min    = today.get("last_scan_alert_min", -31)
+    current_min       = now.hour * 60 + now.minute
+    mins_since_alert  = current_min - last_alert_min if current_min >= last_alert_min else current_min + 1440 - last_alert_min
+    should_alert      = trade_just_placed or mins_since_alert >= 30
+
+    if should_alert:
+        today["last_scan_alert_min"] = current_min
+        with open(trade_log, "w") as f:
+            json.dump(today, f, indent=2)
+        alert.send(
+            "🥇 GOLD BOT Scan! " + mode + "\n"
+            "Time: " + now.strftime("%H:%M SGT") + " | " + session + "\n"
+            "Balance: $" + str(round(current_balance, 2)) +
+            " | Realized: $" + str(round(realized_pnl, 2)) + " " + pnl_emoji + "\n"
+            "Trades: " + str(today["trades"]) + "/" + str(settings["max_trades_day"]) +
+            " | W/L: " + str(wins) + "/" + str(losses) + "\n"
+            "Need: " + str(threshold_used) + "/7 to trade\n"
+            + target_msg + "\n"
+            "─────────────────────────\n"
+            + cpr_line +
+            "─── Setups ───\n"
+            + summary
+        )
+    else:
+        log.info("Scan silent — next summary in " + str(30 - mins_since_alert) + " mins")
 
 
 # ── MAIN LOOP — runs every 5 minutes on Railway ───────────────────────────────
