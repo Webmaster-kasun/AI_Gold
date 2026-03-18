@@ -1,44 +1,103 @@
-name: OANDA Gold CPR Bot
+name: CPR Gold Bot V1.1
+
+# ─────────────────────────────────────────────────────────────────
+# Session coverage (SGT = UTC+8, so UTC = SGT - 8)
+#
+# ASIAN SESSION   10:00–13:59 SGT  =  02:00–05:59 UTC
+# LONDON SESSION  14:00–19:59 SGT  =  06:00–11:59 UTC
+# US SESSION      20:00–01:59 SGT  =  12:00–17:59 UTC
+#
+# Weekend guard: skip Sat/Sun entirely.
+# Monday before 08:00 SGT skipped (Tokyo open stabilization).
+# ─────────────────────────────────────────────────────────────────
 
 on:
   schedule:
-    # 9am–11pm SGT = 1am–3pm UTC  (SGT = UTC+8)
-    - cron: "*/10 1-14 * * 1-5"   # Mon–Fri 1am–2pm UTC (9am–10pm SGT)
-    - cron: "*/10 15 * * 1-5"     # Mon–Fri 3pm UTC (11pm SGT final window)
+    # ── ASIAN SESSION: 02:00–05:59 UTC Mon–Fri ───────────────────
+    - cron: "*/5 2-5 * * 1-5"
 
-  workflow_dispatch:               # Manual trigger anytime
+    # ── LONDON SESSION: 06:00–11:59 UTC Mon–Fri ──────────────────
+    - cron: "*/5 6-11 * * 1-5"
+
+    # ── US SESSION: 12:00–17:59 UTC Mon–Fri ──────────────────────
+    - cron: "*/5 12-17 * * 1-5"
+
+  workflow_dispatch:   # Manual trigger anytime
 
 jobs:
   trade:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5.4.0
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run Gold CPR Bot
+      # Restore persisted trade history, score cache, DB, and runtime state
+      - name: Restore persisted state
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/trade_history.json
+            data/trade_history_archive.json
+            data/score_cache.json
+            data/runtime_state.json
+            data/calendar_cache.json
+            data/cpr_gold.db
+          key: gold-state-${{ github.run_id }}
+          restore-keys: |
+            gold-state-
+
+      - name: Run bot
         env:
           OANDA_API_KEY:    ${{ secrets.OANDA_API_KEY }}
           OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
           TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DATA_DIR:         ${{ github.workspace }}/data
         run: python bot.py
 
-      - name: Save logs
+      # Commit trade history back to repo so it survives cache expiry
+      - name: Commit trade history
         if: always()
-        uses: actions/upload-artifact@v4.6.2
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/trade_history.json data/trade_history_archive.json data/score_cache.json data/runtime_state.json || true
+          git diff --staged --quiet || git commit -m "chore: update trade state [skip ci]"
+          git push || true
+
+      # Save state cache for next run
+      - name: Save persisted state
+        if: always()
+        uses: actions/cache@v4
         with:
-          name: gold-logs-${{ github.run_number }}
           path: |
-            trades_*.json
-            performance_log.txt
+            data/trade_history.json
+            data/trade_history_archive.json
+            data/score_cache.json
+            data/runtime_state.json
+            data/calendar_cache.json
+            data/cpr_gold.db
+          key: gold-state-${{ github.run_id }}
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: |
+            data/trade_history.json
+            data/trade_history_archive.json
+            data/score_cache.json
+            data/runtime_state.json
           retention-days: 30
