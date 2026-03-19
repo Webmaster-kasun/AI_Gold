@@ -1,28 +1,10 @@
-name: CPR Gold Bot V1.1
+name: CPR Gold Bot V1.1 (DISABLED - Railway is primary runner)
 
-# ─────────────────────────────────────────────────────────────────
-# Session coverage (SGT = UTC+8, so UTC = SGT - 8)
-#
-# ASIAN SESSION   10:00–13:59 SGT  =  02:00–05:59 UTC
-# LONDON SESSION  14:00–19:59 SGT  =  06:00–11:59 UTC
-# US SESSION      20:00–01:59 SGT  =  12:00–17:59 UTC
-#
-# Weekend guard: skip Sat/Sun entirely.
-# Monday before 08:00 SGT skipped (Tokyo open stabilization).
-# ─────────────────────────────────────────────────────────────────
+# GitHub Actions is DISABLED - Railway runs this bot 24/7
+# Only enable workflow_dispatch if you want to run manually for testing
 
 on:
-  schedule:
-    # ── ASIAN SESSION: 02:00–05:59 UTC Mon–Fri ───────────────────
-    - cron: "*/5 2-5 * * 1-5"
-
-    # ── LONDON SESSION: 06:00–11:59 UTC Mon–Fri ──────────────────
-    - cron: "*/5 6-11 * * 1-5"
-
-    # ── US SESSION: 12:00–17:59 UTC Mon–Fri ──────────────────────
-    - cron: "*/5 12-17 * * 1-5"
-
-  workflow_dispatch:   # Manual trigger anytime
+  workflow_dispatch:   # Manual trigger only - NO automatic schedule
 
 jobs:
   trade:
@@ -42,7 +24,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Restore persisted trade history, score cache, DB, and runtime state
       - name: Restore persisted state
         uses: actions/cache@v4
         with:
@@ -66,17 +47,6 @@ jobs:
           DATA_DIR:         ${{ github.workspace }}/data
         run: python bot.py
 
-      # Commit trade history back to repo so it survives cache expiry
-      - name: Commit trade history
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/trade_history.json data/trade_history_archive.json data/score_cache.json data/runtime_state.json || true
-          git diff --staged --quiet || git commit -m "chore: update trade state [skip ci]"
-          git push || true
-
-      # Save state cache for next run
       - name: Save persisted state
         if: always()
         uses: actions/cache@v4
@@ -89,15 +59,3 @@ jobs:
             data/calendar_cache.json
             data/cpr_gold.db
           key: gold-state-${{ github.run_id }}
-
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-${{ github.run_number }}
-          path: |
-            data/trade_history.json
-            data/trade_history_archive.json
-            data/score_cache.json
-            data/runtime_state.json
-          retention-days: 30
