@@ -644,19 +644,23 @@ def run_bot():
         raw_atr     = get_atr_pips(trader, name, config["pip"], multiplier=1.0)
         pip         = config["pip"]
 
-        # FIX 9: SL range 1000–2400 pips — matches gold's real intraday swings.
-        # Old range (500–600p) was too tight, causing frequent stop-outs on normal retracements.
-        # 1000p = ~$10 per unit minimum stop. 2400p = ~$24 maximum stop per unit.
-        # ATR-based: if ATR gives us something in range we use it, otherwise clamp.
+        # FIX 10: SL range 900–1100 pips — tighter control matching user expectation.
+        # 900p  = ~$9  per unit minimum stop.
+        # 1100p = ~$11 per unit maximum stop.
+        # ATR-based: clamp to 900–1100. Default 1000p when ATR unavailable.
         if raw_atr:
-            stop_pips = max(1000, min(raw_atr, 2400))
+            stop_pips = max(900, min(raw_atr, 1100))
         else:
-            stop_pips = 1500  # safe default when ATR unavailable
+            stop_pips = 1000  # safe default when ATR unavailable
 
         size = calc_position_size(current_balance, stop_pips, pip, score, price)
 
-        tp_pips  = stop_pips * 3   # Default 1:3 R:R
-        tp_label = "1:3 R:R (default)"
+        # FIX 10: TP capped at 2000–2500 pips to target ~$20–25 USD (~27–33 SGD) per unit.
+        # Old code used stop_pips * 3 which produced 3000–7200p TP — way too wide.
+        # With stop=900–1100p, a 2:1 R:R gives 1800–2200p TP (~$18–22 per unit).
+        # We cap at 2500p to avoid runaway TP targets while still allowing CPR-dynamic targets.
+        tp_pips  = min(stop_pips * 2, 2500)   # 2:1 R:R, hard cap 2500 pips
+        tp_label = "2:1 R:R capped 2500p (default)"
 
         if cpr_levels and price:
             r1           = cpr_levels.get("r1", 0)
@@ -665,8 +669,8 @@ def run_bot():
             if target_level:
                 dist = abs(target_level - price) / pip
                 if stop_pips * 2 <= dist <= stop_pips * 4:
-                    tp_pips  = int(dist)
-                    tp_label = ("R1=" + str(r1) if direction == "BUY" else "S1=" + str(s1)) + " (dynamic)"
+                    tp_pips  = min(int(dist), 2500)   # FIX 10: hard cap at 2500p
+                    tp_label = ("R1=" + str(r1) if direction == "BUY" else "S1=" + str(s1)) + " (dynamic, capped)"
 
         rr = tp_pips / stop_pips
         if rr < 2.0:
