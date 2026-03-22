@@ -27,10 +27,11 @@ jobs:
 
       - name: Run Gold CPR Bot (single scan)
         env:
-          OANDA_API_KEY:    ${{ secrets.OANDA_API_KEY }}
-          OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
-          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OANDA_API_KEY:      ${{ secrets.OANDA_API_KEY }}
+          OANDA_ACCOUNT_ID:   ${{ secrets.OANDA_ACCOUNT_ID }}
+          TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
         run: python bot.py
 
       - name: Save logs
