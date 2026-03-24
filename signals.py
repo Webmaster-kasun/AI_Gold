@@ -3,7 +3,9 @@ Gold Signal Engine — 7-Check Professional Entry System
 =======================================================
 Scoring (7 pts max):
   Check 1 — CPR Breakout    (0–2 pts): Price above TC=BUY, below BC=SELL
-  Check 2 — H4 Trend        (block):   H4 EMA20 vs EMA50 — hard block if against trend
+                                        Wide CPR (post-crash): 1 pt for upper/lower half bias
+  Check 2 — H4 Trend        (block):   Normal/Narrow CPR → hard block if counter-trend
+                                        Wide CPR (post-crash) → -1 pt penalty only, no hard block
   Check 3 — EMA Alignment   (0–1 pt):  H1 EMA20/50 agree with direction
   Check 4 — RSI Momentum    (0–1 pt):  RSI > 55 BUY / RSI < 45 SELL  [Wilder smoothed]
   Check 5 — PDH/PDL Clear   (0–1 pt):  Price clear of Prior Day High/Low (200p+)
@@ -11,12 +13,13 @@ Scoring (7 pts max):
   Check 7 — M15 Rejection   (0–1 pt):  Last M15 candle shows rejection at level
 
   Need 5/7 to trade (London/NY) | 4/7 Asian session
-  ATR filter: 300–5000p range (healthy volatility)
+  ATR filter: 300–10000p range | 5000–10000p = warning only | >10000p = hard block
   SL range: 1000–2400 pips (wider for gold's true swings)
 
-FIX 12:
-  - H4 trend block now logs EMA20, EMA50, direction, and block decision clearly
-  - Every signal scan logs whether H4 block fired or passed
+POST-CRASH MODE (wide CPR > 0.6%):
+  - Price inside CPR band → 1 pt based on upper/lower half bias (no early exit)
+  - H4 counter-trend → -1 pt penalty instead of hard block
+  - Bot can still score and trade during choppy post-crash recovery days
 """
 
 import os
@@ -231,9 +234,13 @@ class SignalEngine:
             min_atr = 300 if is_asian else 500
             if atr_pips < min_atr:
                 return 0, "NONE", "ATR=" + str(atr_pips) + "p — too quiet, skip"
-            if atr_pips > 5000:
+            if atr_pips > 10000:
                 return 0, "NONE", "ATR=" + str(atr_pips) + "p — too volatile, skip"
-            reasons.append("ATR=" + str(atr_pips) + "p — healthy volatility")
+            if atr_pips > 5000:
+                log.warning("ATR=" + str(atr_pips) + "p — high volatility warning (trading with caution)")
+                reasons.append("⚠️ ATR=" + str(atr_pips) + "p — high volatility (trade with caution)")
+            else:
+                reasons.append("ATR=" + str(atr_pips) + "p — healthy volatility")
 
         # FIX 12: H4 TREND — use separated method with full logging
         h4_direction, h4_ema20, h4_ema50 = self.get_h4_trend()
@@ -243,12 +250,14 @@ class SignalEngine:
         if not cpr:
             return 0, "NONE", "CPR levels unavailable"
 
-        tc = cpr["tc"]
-        bc = cpr["bc"]
-        r1 = cpr["r1"]
-        s1 = cpr["s1"]
+        tc        = cpr["tc"]
+        bc        = cpr["bc"]
+        r1        = cpr["r1"]
+        s1        = cpr["s1"]
+        is_wide   = cpr.get("is_wide", False)
+        mid_cpr   = (tc + bc) / 2
 
-        log.info("CPR TC=" + str(tc) + " BC=" + str(bc) + " price=" + str(price))
+        log.info("CPR TC=" + str(tc) + " BC=" + str(bc) + " price=" + str(price) + " wide=" + str(is_wide))
 
         if price > tc:
             direction = "BUY"
@@ -258,21 +267,56 @@ class SignalEngine:
             direction = "SELL"
             score    += 2
             reasons.append("Price " + str(price) + " below BC=" + str(bc) + " SELL (2 pts)")
+        elif is_wide:
+            # POST-CRASH / WIDE CPR: price inside band but give 1 pt based on half
+            # Upper half = leaning BUY, lower half = leaning SELL
+            if price >= mid_cpr:
+                direction = "BUY"
+                score    += 1
+                reasons.append(
+                    "⚠️ Wide CPR: price " + str(price) + " in upper half (mid=" + str(round(mid_cpr, 2)) +
+                    ") — weak BUY bias (1 pt)"
+                )
+            else:
+                direction = "SELL"
+                score    += 1
+                reasons.append(
+                    "⚠️ Wide CPR: price " + str(price) + " in lower half (mid=" + str(round(mid_cpr, 2)) +
+                    ") — weak SELL bias (1 pt)"
+                )
+            log.info("WIDE CPR — inside band, using half-CPR bias direction=" + direction)
         else:
             reasons.append("Price inside CPR (" + str(bc) + "-" + str(tc) + ") — no trade")
             return 0, "NONE", " | ".join(reasons)
 
-        # FIX 12: H4 HARD BLOCK — log the decision clearly every time
+        # FIX 12 + POST-CRASH FIX: H4 TREND BLOCK
+        # Normal/Narrow CPR  → H4 counter-trend = HARD BLOCK (direction=NONE)
+        # Wide CPR (post-crash) → H4 counter-trend = PENALTY only (-1 pt, trade still possible)
         if h4_direction != "NONE" and direction != h4_direction:
-            block_msg = (
-                "H4 BLOCK FIRED | signal=" + direction +
-                " blocked by H4 trend=" + h4_direction +
-                " | H4 EMA20=" + str(h4_ema20) +
-                " H4 EMA50=" + str(h4_ema50)
-            )
-            log.warning(block_msg)
-            reasons.append("H4 trend=" + h4_direction + " BLOCKS " + direction + " signal")
-            return score, "NONE", " | ".join(reasons)
+            if is_wide:
+                # Post-crash: demote to penalty, don't kill the trade
+                score = max(0, score - 1)
+                warn_msg = (
+                    "⚠️ H4 COUNTER-TREND (wide CPR) | signal=" + direction +
+                    " vs H4=" + h4_direction +
+                    " | EMA20=" + str(h4_ema20) + " EMA50=" + str(h4_ema50) +
+                    " | -1 pt penalty (not hard block)"
+                )
+                log.warning(warn_msg)
+                reasons.append(
+                    "⚠️ H4=" + h4_direction + " vs signal=" + direction +
+                    " — counter-trend penalty -1 pt (wide CPR mode)"
+                )
+            else:
+                block_msg = (
+                    "H4 BLOCK FIRED | signal=" + direction +
+                    " blocked by H4 trend=" + h4_direction +
+                    " | H4 EMA20=" + str(h4_ema20) +
+                    " H4 EMA50=" + str(h4_ema50)
+                )
+                log.warning(block_msg)
+                reasons.append("H4 trend=" + h4_direction + " BLOCKS " + direction + " signal")
+                return score, "NONE", " | ".join(reasons)
         elif h4_direction != "NONE":
             pass_msg = (
                 "H4 BLOCK PASSED | signal=" + direction +
