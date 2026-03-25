@@ -175,7 +175,14 @@ def sync_closed_trades(trader, today, trade_log):
         if today_closed:
             latest = sorted(today_closed, key=lambda x: x.get("closeTime", ""))[-1]
             today["last_trade_close_time"]   = latest.get("closeTime", "")
-            today["last_trade_close_result"] = "WIN" if float(latest.get("realizedPL", 0)) > 0 else "LOSS"
+            latest_pl                        = float(latest.get("realizedPL", 0))
+            today["last_trade_close_result"] = "WIN" if latest_pl > 0 else "LOSS"
+            # FIX: capture actual exit price (averageClosePrice from OANDA)
+            exit_price = latest.get("averageClosePrice")
+            if exit_price:
+                today["last_trade_exit_price"] = float(exit_price)
+                if latest_pl > 0:
+                    today["last_win_exit_price"] = float(exit_price)
 
         log.info("Synced W=" + str(wins) + " L=" + str(losses) + " consec=" + str(consec))
 
@@ -455,6 +462,8 @@ def run_bot():
             "last_trade_close_time":      None,
             "last_trade_close_result":    None,
             "last_trade_entry_price":     None,
+            "last_trade_exit_price":      None,
+            "last_win_exit_price":        None,
             "last_trade_entry_time":      None,
             "last_trade_entry_score":     0,
             "last_trade_entry_direction": "",
@@ -679,18 +688,23 @@ def run_bot():
 
             recent_candles  = get_recent_h1_closes(trader, name)
             h4_trend, _, _  = signals.get_h4_trend()
-            last_loss_price = today.get("last_trade_entry_price") if today.get("last_trade_close_result") == "LOSS" else None
-            last_loss_dir   = today.get("last_trade_entry_direction") if today.get("last_trade_close_result") == "LOSS" else None
+            is_loss         = today.get("last_trade_close_result") == "LOSS"
+            last_loss_entry = today.get("last_trade_entry_price")  if is_loss else None
+            last_loss_exit  = today.get("last_trade_exit_price")   if is_loss else None
+            last_loss_dir   = today.get("last_trade_entry_direction") if is_loss else None
+            last_win_exit   = today.get("last_win_exit_price")
 
             ai_result = ai_should_trade(
                 direction       = direction,
                 score           = score,
-                price           = current_balance,
+                price           = price,
                 signal_details  = details,
                 wins_today      = today.get("wins", 0),
                 losses_today    = today.get("losses", 0),
-                last_loss_price = last_loss_price,
+                last_loss_entry = last_loss_entry,
+                last_loss_exit  = last_loss_exit,
                 last_loss_dir   = last_loss_dir,
+                last_win_exit   = last_win_exit,
                 recent_candles  = recent_candles,
                 session         = session,
                 h4_trend        = h4_trend,
