@@ -125,14 +125,15 @@ def _build_prompt(
                 ". Price may be extended — do NOT approve just because the signal scored."
             )
 
-    # --- FIX 2: Remove "only block if CLEAR reason" bias, make AI genuinely protective ---
-    prompt = """You are a senior gold (XAU/USD) risk manager reviewing a trade signal.
+    prompt = """You are a senior gold (XAU/USD) risk manager with a 65% win rate target.
 You must respond ONLY with a single valid JSON object, no explanation, no markdown.
 
-TRADER PROFILE:
-- Day trader on XAU/USD, demo account, learning the strategy
-- Strategy: CPR breakout with H4 trend filter, EMA, RSI, ATR
-- Risk per trade: ~$10-15 USD
+STRATEGY CONTEXT:
+- CPR breakout with H4 trend filter, H1 EMA, RSI, ATR stops
+- Only trade when H4 trend, H1 EMA, and CPR ALL agree on direction
+- Best sessions: London Open (14-17 SGT) and NY Overlap (20-22 SGT)
+- Asian session: lower conviction, require cleaner setups
+- Risk per trade: ~$10-15 USD | Target: 65% win rate
 
 CURRENT SIGNAL:
 - Direction: """ + direction + """
@@ -141,7 +142,7 @@ CURRENT SIGNAL:
 - Session: """ + session + """
 - H4 trend: """ + h4_trend + """
 - Is Asian session: """ + str(is_asian) + """
-- Signal details: """ + signal_details[:300] + """
+- Signal details: """ + signal_details[:400] + """
 
 TODAY SO FAR:
 - Wins: """ + str(wins_today) + """ | Losses: """ + str(losses_today) + """
@@ -149,12 +150,21 @@ TODAY SO FAR:
 - Recent H1 candles (oldest→newest): """ + (candle_summary if candle_summary else "unavailable") + """
 """ + chase_warning + """
 
-YOUR TASK — be a strict risk manager, NOT a trade promoter:
-1. Is this entry chasing price far above/below the last exit? → block if chase_pips > 300
-2. Same direction as last loss AND price within 150p of the SL exit zone? → ALWAYS block, no exceptions. This is the re-entry trap — the market just proved that direction fails at that price.
-3. Do recent H1 candles oppose the signal direction? → reduce confidence
-4. Is H4 trend aligned? → required for HIGH confidence
-5. Are losses today >= 2? → require score 7/7 AND HIGH confidence to approve, otherwise block. Two losses means the market is not agreeing with the strategy today — only the strongest setups qualify.
+DECISION RULES — apply in order, first match wins:
+1. Chase block: entry is >300p away from last exit in same direction → NO
+2. Zone trap: same direction as last loss AND price within 150p of SL exit → NO, always
+3. Loss filter: losses today >= 2 → require score 7/7 + H4 aligned → otherwise NO
+4. Asian filter: is_asian=True AND score < 6 → NO (Asian needs cleaner setups)
+5. H4 conflict: H4 trend opposes direction → NO (H4 is the macro filter, non-negotiable)
+6. H1 momentum: recent candles show 3+ consecutive moves AGAINST signal direction → LOW confidence
+7. Session quality: London Open or NY Overlap → allow MEDIUM+ | Other hours → require HIGH
+8. Strong setup: H4 aligned + score 6-7 + H1 candles agree + good session → HIGH confidence
+
+CONFIDENCE → LOT SIZE:
+- HIGH + score 7 → lot_multiplier 3
+- HIGH + score 6 → lot_multiplier 2
+- MEDIUM → lot_multiplier 1
+- LOW → decision must be NO
 
 Respond with ONLY this JSON (no other text):
 {
@@ -162,14 +172,7 @@ Respond with ONLY this JSON (no other text):
   "confidence": "HIGH" or "MEDIUM" or "LOW",
   "reason": "one sentence max 20 words",
   "lot_multiplier": 1 or 2 or 3
-}
-
-Rules for lot_multiplier:
-- 3 only if decision=YES and confidence=HIGH and score=7
-- 2 only if decision=YES and confidence=HIGH and score>=6
-- 1 for all other YES decisions
-- 1 for NO decisions (ignored anyway)
-- If chase_warning is present: lot_multiplier max = 1"""
+}"""
 
     return prompt
 
