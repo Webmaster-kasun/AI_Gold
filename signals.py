@@ -135,17 +135,17 @@ class SignalEngine:
 
     def _check_m15_rejection(self, direction):
         try:
-            closes, highs, lows, opens, _ = self._fetch_candles("XAU_USD", "M15", 6)
-            if not closes or len(closes) < 2:
+            closes, highs, lows, opens, _ = self._fetch_candles("XAU_USD", "M15", 8)
+            if not closes or len(closes) < 3:
                 return False, "No M15 data"
 
-            for idx in [-1, -2]:
+            for idx in [-1, -2, -3]:
                 h = highs[idx]
                 l = lows[idx]
                 o = opens[idx]
                 c = closes[idx]
                 total_range = h - l
-                if total_range < 0.01:
+                if total_range < 0.05:   # ignore micro-candles (< 5p range)
                     continue
 
                 upper_wick = h - max(o, c)
@@ -153,9 +153,10 @@ class SignalEngine:
                 upper_pct  = upper_wick / total_range
                 lower_pct  = lower_wick / total_range
 
-                if direction == "SELL" and upper_pct >= 0.40:
+                # FIX S5: raised threshold from 40% to 50% — genuine rejections have dominant wicks
+                if direction == "SELL" and upper_pct >= 0.50:
                     return True, "M15 upper wick=" + str(round(upper_pct*100)) + "% — rejection at top"
-                elif direction == "BUY" and lower_pct >= 0.40:
+                elif direction == "BUY" and lower_pct >= 0.50:
                     return True, "M15 lower wick=" + str(round(lower_pct*100)) + "% — rejection at bottom"
 
             if direction == "SELL":
@@ -235,8 +236,12 @@ class SignalEngine:
                 return 0, "NONE", "ATR=" + str(atr_pips) + "p — too volatile, skip"
             reasons.append("ATR=" + str(atr_pips) + "p — healthy volatility")
 
-        # FIX 12: H4 TREND — use separated method with full logging
+        # FIX S1: H4 TREND FIRST — before any scoring.
+        # If H4 data is unavailable we skip entirely (no trade without trend confirmation).
+        # Previously H4 ran after CPR already awarded 2 pts, so a partial score leaked out.
         h4_direction, h4_ema20, h4_ema50 = self.get_h4_trend()
+        if h4_direction == "NONE":
+            return 0, "NONE", "H4 trend unavailable — skip, no trade without trend confirmation"
 
         # CHECK 1: CPR POSITION (0–2 pts)
         cpr = self.cpr.get_levels("XAU_USD")
@@ -262,29 +267,25 @@ class SignalEngine:
             reasons.append("Price inside CPR (" + str(bc) + "-" + str(tc) + ") — no trade")
             return 0, "NONE", " | ".join(reasons)
 
-        # FIX 12: H4 HARD BLOCK — log the decision clearly every time
-        if h4_direction != "NONE" and direction != h4_direction:
-            block_msg = (
+        # FIX S2: H4 HARD BLOCK — now returns score=0 (not partial CPR score=2).
+        # H4 direction is guaranteed non-NONE here (caught at top of function).
+        if direction != h4_direction:
+            log.warning(
                 "H4 BLOCK FIRED | signal=" + direction +
                 " blocked by H4 trend=" + h4_direction +
                 " | H4 EMA20=" + str(h4_ema20) +
                 " H4 EMA50=" + str(h4_ema50)
             )
-            log.warning(block_msg)
             reasons.append("H4 trend=" + h4_direction + " BLOCKS " + direction + " signal")
-            return score, "NONE", " | ".join(reasons)
-        elif h4_direction != "NONE":
-            pass_msg = (
+            return 0, "NONE", " | ".join(reasons)
+        else:
+            log.info(
                 "H4 BLOCK PASSED | signal=" + direction +
                 " aligns with H4 trend=" + h4_direction +
                 " | H4 EMA20=" + str(h4_ema20) +
                 " H4 EMA50=" + str(h4_ema50)
             )
-            log.info(pass_msg)
             reasons.append("H4 trend=" + h4_direction + " confirms direction")
-        else:
-            log.warning("H4 BLOCK SKIPPED — insufficient H4 data, proceeding with caution")
-            reasons.append("H4 data insufficient — proceeding with caution")
 
         # CHECK 3: EMA ALIGNMENT (0–1 pt)
         if len(h1_closes) >= 50:
@@ -300,7 +301,8 @@ class SignalEngine:
             else:
                 reasons.append("EMA conflict: EMA20=" + str(round(ema20,2)) + " EMA50=" + str(round(ema50,2)) + " (0 pts)")
         else:
-            ema20 = price
+            # FIX S3: not enough data — no free point, use None sentinel so check6 also skips safely
+            ema20 = None
             reasons.append("EMA: not enough H1 data (0 pts)")
 
         # CHECK 4: RSI MOMENTUM (0–1 pt)
@@ -346,13 +348,18 @@ class SignalEngine:
             reasons.append("PDH/PDL unavailable — skipping check (0 pts)")
 
         # CHECK 6: NOT OVEREXTENDED (0–1 pt)
-        ema20_dist = abs(price - ema20) / 0.01
-        log.info("Distance from EMA20: " + str(round(ema20_dist)) + "p")
-        if ema20_dist <= 800:
-            score += 1
-            reasons.append("EMA20 dist=" + str(int(ema20_dist)) + "p <= 800p — not overextended (1 pt)")
+        # FIX S4: skip when ema20 is None (insufficient data) — no free point.
+        # Tightened from 800p to 600p: gold at 800p from EMA20 is already chasing.
+        if ema20 is not None:
+            ema20_dist = abs(price - ema20) / 0.01
+            log.info("Distance from EMA20: " + str(round(ema20_dist)) + "p")
+            if ema20_dist <= 600:
+                score += 1
+                reasons.append("EMA20 dist=" + str(int(ema20_dist)) + "p <= 600p — not overextended (1 pt)")
+            else:
+                reasons.append("EMA20 dist=" + str(int(ema20_dist)) + "p > 600p — overextended (0 pts)")
         else:
-            reasons.append("EMA20 dist=" + str(int(ema20_dist)) + "p > 800p — overextended (0 pts)")
+            reasons.append("EMA20 dist: unavailable — skipped (0 pts)")
 
         # CHECK 7: M15 REJECTION CANDLE (0–1 pt)
         m15_ok, m15_reason = self._check_m15_rejection(direction)
