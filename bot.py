@@ -107,7 +107,7 @@ def load_settings():
     default = {
         "max_trades_day":         10,
         "signal_threshold":       5,
-        "signal_threshold_asian": 4,
+        "signal_threshold_asian": 5,
         "demo_mode":              True,
         "trade_gold":             True,
         "trade_gold_asian":       True,
@@ -641,7 +641,7 @@ def run_bot():
             continue
 
         asset_key = "XAUUSD_ASIAN" if is_asian_gold else config["asset"]
-        threshold = settings.get("signal_threshold_asian", 4) if is_asian_gold else settings["signal_threshold"]
+        threshold = settings.get("signal_threshold_asian", 5) if is_asian_gold else settings["signal_threshold"]
 
         score, direction, details = signals.analyze(asset=asset_key)
         log.info(name + ": score=" + str(score) + " dir=" + direction + " | " + details)
@@ -656,7 +656,7 @@ def run_bot():
             continue
 
         if score < threshold or direction == "NONE":
-            scan_results.append(config["emoji"] + " " + name + ": " + str(score) + "/7 — no setup yet")
+            scan_results.append(config["emoji"] + " " + name + ": " + str(score) + "/7 — no setup yet\n  ↳ " + details)
             continue
 
         # FIX B1: SL cooldown now runs AFTER signals.analyze() so 'direction' is the real
@@ -935,7 +935,7 @@ def run_bot():
             "R1=" + str(cpr_gold["r1"]) + " S1=" + str(cpr_gold["s1"]) + "\n"
         )
 
-    threshold_used    = settings.get("signal_threshold_asian", 4) if asian else settings["signal_threshold"]
+    threshold_used    = settings.get("signal_threshold_asian", 5) if asian else settings["signal_threshold"]
     trade_just_placed = any("PLACED" in r for r in scan_results)
     last_alert_min    = today.get("last_scan_alert_min", -61)
     last_alert_score  = today.get("last_alert_score", -1)
