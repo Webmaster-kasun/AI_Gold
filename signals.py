@@ -213,7 +213,7 @@ class SignalEngine:
         reasons   = []
         score     = 0
         direction = "NONE"
-        threshold = 4 if is_asian else 5
+        threshold = 5 if is_asian else 5
 
         h1_closes, h1_highs, h1_lows, _, _ = self._fetch_candles("XAU_USD", "H1", 60)
 
@@ -229,7 +229,7 @@ class SignalEngine:
         atr_pips = self._get_atr_pips(h1_closes, h1_highs, h1_lows)
         if atr_pips is not None:
             log.info("ATR=" + str(atr_pips) + "p")
-            min_atr = 300 if is_asian else 500
+            min_atr = 200 if is_asian else 500
             if atr_pips < min_atr:
                 return 0, "NONE", "ATR=" + str(atr_pips) + "p — too quiet, skip"
             if atr_pips > 5000:
@@ -309,8 +309,8 @@ class SignalEngine:
         rsi_val = self._calc_rsi(h1_closes, 14)
         if rsi_val is not None:
             log.info("RSI(Wilder)=" + str(rsi_val))
-            rsi_buy  = 52 if is_asian else 55
-            rsi_sell = 48 if is_asian else 45
+            rsi_buy  = 55 if is_asian else 55
+            rsi_sell = 45 if is_asian else 45
             if direction == "BUY" and rsi_val > rsi_buy:
                 score += 1
                 reasons.append("RSI=" + str(rsi_val) + " > " + str(rsi_buy) + " — bullish (1 pt)")
