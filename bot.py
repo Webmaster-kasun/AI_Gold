@@ -63,7 +63,7 @@ ASSETS = {
         "setting":       "trade_gold",
         "pip":           0.01,
         "precision":     2,
-        "session_hours": [(9, 23)],
+        "session_hours": [(0, 23)],  # 24hr — off-hours filtered by threshold
     },
 }
 
@@ -404,11 +404,8 @@ def run_bot():
     hour     = now.hour
     minute   = now.minute
 
-    # FIX 15: Bot sleeps at 11:55 PM SGT — no late night news trades
-    if hour == 23 and minute >= 55:
-        log.info("11:55 PM SGT — bot sleeping, no new trades")
-
-        # FIX 16: Send daily report at exactly 11:59 PM SGT
+    # FIX 16: Send daily report at exactly 11:59 PM SGT (bot keeps running after)
+    if hour == 23 and minute >= 59:
         trade_log = "trades_" + now.strftime("%Y%m%d") + ".json"
         try:
             with open(trade_log) as f:
@@ -416,7 +413,7 @@ def run_bot():
         except FileNotFoundError:
             today = {}
 
-        if minute >= 59 and not today.get("daily_summary_sent", False):
+        if not today.get("daily_summary_sent", False):
             trader   = OandaTrader(demo=settings["demo_mode"])
             trader.login()
             cpr_gold = cpr_calc.get_levels("XAU_USD")
@@ -424,12 +421,13 @@ def run_bot():
             send_daily_summary(alert, trader, today, cpr_gold, mode, trade_log)
         return
 
-    active_hours = (9 <= hour <= 22)
+    # 24HR MODE: trade all non-weekend hours
     london_open  = (14 <= hour <= 17)
     london       = (14 <= hour <= 19)
     ny_overlap   = (20 <= hour <= 22)
     asian        = (9 <= hour <= 13)
-    good_session = active_hours
+    off_hours    = not (asian or london or ny_overlap)  # 0-8 SGT and 23 SGT
+    good_session = True  # Always active — weekend check below handles days off
 
     if asian:
         session = "Asian Session (SGX/Tokyo 9am-1pm SGT)"
@@ -439,14 +437,16 @@ def run_bot():
         session = "NY Overlap (BEST for Gold macro moves!)"
     elif london:
         session = "London Session"
+    elif off_hours:
+        session = "Off-hours (0-8 SGT / late night) — higher threshold"
     else:
-        session = "Off-hours (monitoring only)"
+        session = "Monitoring"
 
     if now.weekday() == 5:
         log.info("Saturday — markets closed")
         return
-    if now.weekday() == 6 and hour < 9:
-        log.info("Sunday early — skipping")
+    if now.weekday() == 6 and hour < 5:
+        log.info("Sunday early (before 5am SGT) — markets closed")
         return
 
     trader = OandaTrader(demo=settings["demo_mode"])
@@ -554,10 +554,6 @@ def run_bot():
         with open(trade_log, "w") as f:
             json.dump(today, f, indent=2)
 
-    if not good_session:
-        log.info("Off-hours — sleeping silently")
-        return
-
     calendar     = EconomicCalendar()
     news_summary = calendar.get_today_summary()
     if "No high" not in news_summary and not today.get("news_alert_sent"):
@@ -632,7 +628,9 @@ def run_bot():
             except Exception as e:
                 log.warning("Duplicate lock error: " + str(e))
 
-        max_spread            = settings.get("max_spread_gold_asian", 200) if is_asian_gold else settings.get("max_spread_gold", 150)
+        max_spread            = (settings.get("max_spread_gold_asian", 200) if is_asian_gold
+                               else settings.get("max_spread_gold_offhours", 300) if off_hours
+                               else settings.get("max_spread_gold", 150))
         spread_ok, spread_val = check_spread(trader, name, max_spread, config["pip"])
 
         news_active, news_reason = calendar.is_news_time(name)
@@ -641,7 +639,9 @@ def run_bot():
             continue
 
         asset_key = "XAUUSD_ASIAN" if is_asian_gold else config["asset"]
-        threshold = settings.get("signal_threshold_asian", 5) if is_asian_gold else settings["signal_threshold"]
+        threshold = (settings.get("signal_threshold_asian", 4) if is_asian_gold
+                     else settings.get("signal_threshold_offhours", 6) if off_hours
+                     else settings["signal_threshold"])
 
         score, direction, details = signals.analyze(asset=asset_key)
         log.info(name + ": score=" + str(score) + " dir=" + direction + " | " + details)
@@ -935,7 +935,9 @@ def run_bot():
             "R1=" + str(cpr_gold["r1"]) + " S1=" + str(cpr_gold["s1"]) + "\n"
         )
 
-    threshold_used    = settings.get("signal_threshold_asian", 5) if asian else settings["signal_threshold"]
+    threshold_used    = (settings.get("signal_threshold_asian", 4) if asian
+                         else settings.get("signal_threshold_offhours", 6) if off_hours
+                         else settings["signal_threshold"])
     trade_just_placed = any("PLACED" in r for r in scan_results)
     last_alert_min    = today.get("last_scan_alert_min", -61)
     last_alert_score  = today.get("last_alert_score", -1)
