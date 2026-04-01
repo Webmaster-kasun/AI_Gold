@@ -153,16 +153,16 @@ TODAY SO FAR:
 DECISION RULES — apply in order, first match wins:
 1. Chase block: entry is >300p away from last exit in same direction → NO
 2. Zone trap: same direction as last loss AND price within 150p of SL exit → NO, always
-3. Loss filter: losses today >= 2 → require score 7/7 + H4 aligned → otherwise NO
-4. Asian filter: is_asian=True AND score < 5 → NO (FIX 5: was < 6, blocked all valid 5/7 Asian trades)
+3. Loss filter: losses today >= 2 AND score < 6 → NO | score 6/7 → YES (2 trades max) | score 7/7 → YES (3 trades, high win chance)
+4. Asian filter: is_asian=True AND score < 5 → NO
 5. H4 conflict: H4 trend opposes direction → NO (H4 is the macro filter, non-negotiable)
 6. H1 momentum: recent candles show 3+ consecutive moves AGAINST signal direction → LOW confidence
-7. Session quality: London Open or NY Overlap → allow MEDIUM+ | Other hours → require HIGH
+7. Session quality: London Open or NY Overlap → allow MEDIUM+ | Asian → allow MEDIUM+ | Off-hours → require HIGH
 8. Strong setup: H4 aligned + score 6-7 + H1 candles agree + good session → HIGH confidence
 
 CONFIDENCE → LOT SIZE:
-- HIGH + score 7 → lot_multiplier 3
-- HIGH + score 6 → lot_multiplier 2
+- HIGH + score 7 → lot_multiplier 3 (3 trades worth of size — highest win probability)
+- HIGH + score 6 → lot_multiplier 2 (2 trades worth of size)
 - MEDIUM → lot_multiplier 1
 - LOW → decision must be NO
 
