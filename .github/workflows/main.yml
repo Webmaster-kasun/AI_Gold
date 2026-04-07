@@ -1,45 +1,83 @@
-name: OANDA Gold CPR Bot
+# ⚠️  THIS WORKFLOW IS DISABLED — DO NOT RE-ENABLE WITHOUT READING BELOW
+#
+# This file was the original GitHub Actions deployment before Railway migration.
+# Railway now runs `python scheduler.py` as a persistent process via railway.json
+# and Procfile. If this workflow were active alongside Railway, BOTH would fire
+# bot.py every 5 minutes during trading hours, resulting in duplicate trade orders.
+#
+# To re-enable (e.g. if you switch away from Railway):
+#   1. Remove the `if: false` guard from the job below.
+#   2. Ensure Railway is stopped / removed first.
+#   3. Fix state-persistence: the bot writes to DATA_DIR (/data) but the cache
+#      step looks in the repo root — set DATA_DIR to a path the cache can reach.
+#
+# Current live deployment: Railway  →  python scheduler.py
+
+name: CPR Gold Bot (DISABLED — Railway is live deployment)
 
 on:
-  workflow_dispatch:  # Manual trigger only — Railway handles automatic scanning
-
-# FIX 9: Removed cron schedule.
-# Railway runs bot.py continuously with its own 5-min loop.
-# Cron here caused 4-6 duplicate bots running simultaneously,
-# all hitting OANDA API and causing rate limit / key revocation.
+  workflow_dispatch:   # manual trigger only; schedule lines removed to prevent accidental runs
 
 jobs:
   trade:
+    if: false          # ← prevents the job running under any trigger
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5.4.0
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run Gold CPR Bot (single scan)
+      - name: Restore trade history
+        uses: actions/cache@v4
+        with:
+          path: |
+            trade_history.json
+            score_cache.json
+          key: trade-history-${{ github.run_id }}
+          restore-keys: |
+            trade-history-
+
+      - name: Run bot
         env:
-          OANDA_API_KEY:      ${{ secrets.OANDA_API_KEY }}
-          OANDA_ACCOUNT_ID:   ${{ secrets.OANDA_ACCOUNT_ID }}
-          TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          OANDA_API_KEY:    ${{ secrets.OANDA_API_KEY }}
+          OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
 
-      - name: Save logs
+      - name: Commit trade history to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add trade_history.json score_cache.json || true
+          git diff --staged --quiet || git commit -m "chore: update trade history [skip ci]"
+          git push || true
+
+      - name: Save trade history cache
         if: always()
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/cache@v4
         with:
-          name: gold-logs-${{ github.run_number }}
           path: |
-            trades_*.json
-            performance_log.txt
-          retention-days: 7
+            trade_history.json
+            score_cache.json
+          key: trade-history-${{ github.run_id }}
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: |
+            trade_history.json
+            score_cache.json
+          retention-days: 30
