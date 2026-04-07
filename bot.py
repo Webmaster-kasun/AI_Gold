@@ -1795,6 +1795,9 @@ def _signal_phase(db, run_id, settings, alert, trader, history, now_sgt, today, 
                 _h4_trend = str(levels["h4_trend"])
             elif levels.get("h1_ema_trend"):
                 _h4_trend = str(levels["h1_ema_trend"])
+            elif levels.get("h1_trend_bullish") is not None:
+                # Fall back to H1 EMA trend as a proxy for macro direction
+                _h4_trend = "BULLISH" if levels["h1_trend_bullish"] else "BEARISH"
 
             ai_result = ai_should_trade(
                 direction       = direction,
