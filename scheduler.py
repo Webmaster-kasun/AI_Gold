@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from bot import run_bot_cycle
+from auto_tuner import run_auto_tune_daily
 from oanda_trader import OandaTrader
 from reporting import (send_daily_report, send_weekly_report, send_monthly_report,
                        send_asian_session_report, send_london_session_report, send_us_session_report)
@@ -144,6 +145,16 @@ def main():
         CronTrigger(day_of_week='mon-fri', hour=15, minute=30, timezone=SG_TZ),
         id='daily_report',
         name='Daily performance report',
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Auto-tuner: daily at 08:00 SGT — analyses last N trades, adjusts settings
+    scheduler.add_job(
+        run_auto_tune_daily,
+        CronTrigger(hour=8, minute=0, timezone=SG_TZ),
+        id='auto_tune_daily',
+        name='Daily auto-tune (pattern analysis + settings adjustment)',
         max_instances=1,
         coalesce=True,
     )
