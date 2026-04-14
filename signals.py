@@ -178,6 +178,20 @@ class SignalEngine:
                 h1_trend_bullish = _h1_price > _h1_ema
         levels["h1_trend_bullish"] = h1_trend_bullish
 
+        # ── H4 trend filter (v5.3) ─────────────────────────────────────────
+        # Hard block on macro H4 direction — prevents shorting a bull trend
+        # or buying a bear trend even when M15/CPR gives a counter signal.
+        h4_trend_bullish = None   # None = filter disabled or insufficient data
+        _h4_filter = bool((settings or {}).get("h4_trend_filter_enabled", True))
+        if _h4_filter:
+            _h4_period = int((settings or {}).get("h4_ema_period", 21))
+            h4_closes, _, _ = self._fetch_candles(instrument, "H4", _h4_period + 5)
+            if len(h4_closes) >= _h4_period:
+                _h4_ema = sum(h4_closes[-_h4_period:]) / _h4_period
+                _h4_price = h4_closes[-1]
+                h4_trend_bullish = _h4_price > _h4_ema
+        levels["h4_trend_bullish"] = h4_trend_bullish
+
         # ATR(14) — used by bot.py for SL sizing, not for scoring
         atr_val = self._atr(m15_highs, m15_lows, m15_closes, 14)
         levels["atr"]          = round(atr_val, 2) if atr_val else None
@@ -257,6 +271,23 @@ class SignalEngine:
             else:
                 trend_label = "bullish" if h1_trend_bullish else "bearish"
                 reasons.append(f"✅ H1 trend {trend_label} — aligns with {direction}")
+
+        # ── 1c. H4 trend filter (v5.3) ────────────────────────────────────
+        # Macro hard block — H4 EMA21 must agree with trade direction.
+        # This catches multi-day bull/bear runs that H1 alone can miss
+        # during intraday pullbacks (e.g. Apr 12–13 gold surge).
+        if h4_trend_bullish is not None:
+            if direction == "BUY" and not h4_trend_bullish:
+                reasons.append("❌ H4 trend bearish — BUY blocked by H4 macro filter")
+                log.info("H4 trend filter blocked BUY — H4 price below EMA%d", _h4_period)
+                return 0, "NONE", " | ".join(reasons), levels, 0
+            elif direction == "SELL" and h4_trend_bullish:
+                reasons.append("❌ H4 trend bullish — SELL blocked by H4 macro filter")
+                log.info("H4 trend filter blocked SELL — H4 price above EMA%d", _h4_period)
+                return 0, "NONE", " | ".join(reasons), levels, 0
+            else:
+                h4_label = "bullish" if h4_trend_bullish else "bearish"
+                reasons.append(f"✅ H4 trend {h4_label} — aligns with {direction}")
 
         # ── 2. SMA alignment ───────────────────────────────────────────────
         if direction == "BUY":
