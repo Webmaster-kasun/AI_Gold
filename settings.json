@@ -21,7 +21,7 @@
   "pyramid_max_risk_usd": 50,
   "max_trades_day": 20,
   "max_losing_trades_day": 8,
-  "loss_streak_cooldown_min": 30,
+  "loss_streak_cooldown_min": 90,
   "exhaustion_atr_mult": 2.5,
   "max_spread_pips": 160,
   "spread_limits": {
@@ -67,7 +67,7 @@
   "session_end_hour_sgt": 1,
   "same_setup_cooldown_min": 10,
   "trailing_stop_atr_mult": 0,
-  "consecutive_sl_guard": 2,
+  "consecutive_sl_guard": 3,
   "breakeven_enabled": false,
   "min_reentry_wait_min": 10,
   "version": "5.2",
@@ -90,8 +90,10 @@
   "sl_min_atr_mult": 0.8,
   "h1_trend_filter_enabled": true,
   "h1_ema_period": 21,
+  "h4_trend_filter_enabled": true,
+  "h4_ema_period": 21,
   "require_candle_close": true,
-  "sl_direction_cooldown_min": 60,
+  "sl_direction_cooldown_min": 180,
   "post_win_candle_block": true,
   "ai_reasoning": true
 }
