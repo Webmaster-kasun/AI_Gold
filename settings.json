@@ -20,6 +20,7 @@
   "pyramid_sl_usd": 1.5,
   "pyramid_max_risk_usd": 50,
   "max_trades_day": 20,
+  "max_wins_day": 1,
   "max_losing_trades_day": 4,
   "loss_streak_cooldown_min": 60,
   "exhaustion_atr_mult": 2.5,
