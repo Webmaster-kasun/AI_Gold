@@ -140,6 +140,7 @@ def validate_settings(settings: dict) -> dict:
     # v4.4 — Three sessions active
     settings.setdefault("spread_limits",             {"Asian": 150, "London": 140, "US": 140})
     settings.setdefault("max_trades_day",            999)   # v4.0-uncapped
+    settings.setdefault("max_wins_day",              999)   # uncapped by default; set to 1 to stop after first win
     settings.setdefault("max_losing_trades_day",     999)   # v4.0-uncapped
     settings.setdefault("sl_mode",                   "atr_based")   # v4.0
     settings.setdefault("tp_mode",                   "rr_multiple")
@@ -349,7 +350,7 @@ def window_trade_count(history: list, today_str: str, window_key: str) -> int:
 # ── Risk / daily cap helpers ───────────────────────────────────────────────────
 
 def daily_totals(history: list, today_str: str, trader=None, instrument: str = INSTRUMENT):
-    pnl, count, losses = 0.0, 0, 0
+    pnl, count, losses, wins = 0.0, 0, 0, 0
     for t in history:
         if t.get("timestamp_sgt", "").startswith(today_str) and t.get("status") == "FILLED":
             count += 1
@@ -358,6 +359,8 @@ def daily_totals(history: list, today_str: str, trader=None, instrument: str = I
                 pnl += p
                 if p < 0:
                     losses += 1
+                elif p > 0:
+                    wins += 1
     if trader is not None:
         try:
             position = trader.get_position(instrument)
@@ -371,7 +374,7 @@ def daily_totals(history: list, today_str: str, trader=None, instrument: str = I
                     losses += 1
         except Exception as e:
             log.warning("Could not fetch unrealized P&L for daily cap: %s", e)
-    return pnl, count, losses
+    return pnl, count, losses, wins
 
 
 def get_trading_day(now_sgt: "datetime", day_start_hour: int = 8) -> str:
@@ -999,7 +1002,7 @@ def _pyramid_phase(db, run_id, settings, alert, trader, history, now_sgt, today,
     # _guard_phase() checked at cycle start, but a trade may have closed
     # as a loss between then and now (e.g. fast stop-out during signal eval).
     # If the cap is now met, block the pyramid add immediately — no new position.
-    _pyr_losses_pnl, _pyr_losses_count, _pyr_losses = daily_totals(history, today, trader=trader)
+    _pyr_losses_pnl, _pyr_losses_count, _pyr_losses, _pyr_wins = daily_totals(history, today, trader=trader)
     _pyr_max_losses = int(settings.get("max_losing_trades_day", 3))
     if _pyr_losses >= _pyr_max_losses:
         reason = f"loss_cap_reached ({_pyr_losses}/{_pyr_max_losses}) — pyramid blocked (v4.2)"
@@ -1152,7 +1155,7 @@ def _guard_phase(db, run_id, settings, alert, trader, history, now_sgt, today, d
     # Must run BEFORE cooldown_started notification so we never show a misleading
     # "Resumes HH:MM" timestamp when the daily cap is already exhausted for the day.
     # trader=None is intentional here — we only need the loss *count* from history.
-    _early_pnl, _early_trades, _early_losses = daily_totals(history, today)
+    _early_pnl, _early_trades, _early_losses, _early_wins = daily_totals(history, today)
     _max_losses_early = int(settings.get("max_losing_trades_day", 3))
     if _early_losses >= _max_losses_early:
         _day_start_h = int(settings.get("trading_day_start_hour_sgt", 8))
@@ -1280,7 +1283,7 @@ def _guard_phase(db, run_id, settings, alert, trader, history, now_sgt, today, d
     db.upsert_state("last_reconciliation", {**reconcile, "checked_at_sgt": now_sgt.strftime("%Y-%m-%d %H:%M:%S")})
 
     # ── Daily caps ─────────────────────────────────────────────────────────────
-    daily_pnl, daily_trades, daily_losses = daily_totals(history, today, trader=trader)
+    daily_pnl, daily_trades, daily_losses, daily_wins = daily_totals(history, today, trader=trader)
     max_losses = int(settings.get("max_losing_trades_day", 3))
     if daily_losses >= max_losses:
         day_start_h = int(settings.get("trading_day_start_hour_sgt", 8))
@@ -1295,6 +1298,27 @@ def _guard_phase(db, run_id, settings, alert, trader, history, now_sgt, today, d
         send_once_per_state(alert, ops, "loss_cap_state", f"loss_cap:{today}", msg)
         update_runtime_state(last_cycle_finished=now_sgt.strftime("%Y-%m-%d %H:%M:%S"), status="SKIPPED_LOSS_CAP")
         db.finish_cycle(run_id, status="SKIPPED", summary={"stage": "daily_caps", "reason": "loss_cap"})
+        return None
+
+    # ── Daily win cap (stop trading after N winning trades in a day) ──────────
+    max_wins = int(settings.get("max_wins_day", 1))
+    if daily_wins >= max_wins:
+        day_start_h   = int(settings.get("trading_day_start_hour_sgt", 8))
+        day_reset_sgt = (now_sgt + timedelta(days=1)).replace(
+            hour=day_start_h, minute=0, second=0, microsecond=0
+        )
+        msg = (
+            f"🏆 Daily win cap reached — {daily_wins}/{max_wins} winning trade(s) today. "
+            f"No more entries until {day_reset_sgt.strftime('%Y-%m-%d %H:%M')} SGT."
+        )
+        log_event("COOLDOWN_ACTIVE", msg, run_id=run_id)
+        send_once_per_state(alert, ops, "win_cap_state", f"win_cap:{today}", msg)
+        update_runtime_state(
+            last_cycle_finished=now_sgt.strftime("%Y-%m-%d %H:%M:%S"),
+            status="SKIPPED_WIN_CAP",
+        )
+        db.finish_cycle(run_id, status="SKIPPED",
+                        summary={"stage": "daily_caps", "reason": "win_cap"})
         return None
 
     # v4.2 — Per-session loss sub-cap.
