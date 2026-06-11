@@ -1443,15 +1443,23 @@ def _guard_phase(db, run_id, settings, alert, trader, history, now_sgt, today, d
         _post_win_hours = float(settings.get("post_win_cooldown_hours", 6))
         # Only look at wins from today's trading day to avoid blocking the
         # very first entry of the next session.
+        # v6.1 FIX: do NOT filter by closed_at_sgt date — it can be unreliable
+        # (Railway UTC clock, timezone stripping, or race with backfill_pnl).
+        # Use timestamp_sgt (entry date) for the today filter, which is always
+        # written at trade placement time and is always SGT. The 6-hour cooldown
+        # then counts from closed_at_sgt if available, else now_sgt.
         _last_win = next(
             (t for t in reversed(history)
              if t.get("status") == "FILLED"
-             and (t.get("realized_pnl_usd") or 0) > 0
-             and (t.get("closed_at_sgt") or t.get("timestamp_sgt") or "")[:10] == today),
+             and isinstance(t.get("realized_pnl_usd"), (int, float))
+             and t.get("realized_pnl_usd") > 0
+             and t.get("timestamp_sgt", "").startswith(today)),
             None,
         )
         if _last_win:
-            _closed_at_str = _last_win.get("closed_at_sgt", "")
+            # Use closed_at_sgt if available; fall back to now_sgt so the block
+            # still fires even if closed_at_sgt was never written.
+            _closed_at_str = _last_win.get("closed_at_sgt", "") or now_sgt.strftime("%Y-%m-%d %H:%M:%S")
             if _closed_at_str:
                 try:
                     _closed_at = datetime.strptime(_closed_at_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=SGT)
