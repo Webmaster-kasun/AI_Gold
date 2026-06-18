@@ -1443,17 +1443,22 @@ def _guard_phase(db, run_id, settings, alert, trader, history, now_sgt, today, d
         _post_win_hours = float(settings.get("post_win_cooldown_hours", 6))
         # Only look at wins from today's trading day to avoid blocking the
         # very first entry of the next session.
-        # v6.1 FIX: do NOT filter by closed_at_sgt date — it can be unreliable
-        # (Railway UTC clock, timezone stripping, or race with backfill_pnl).
-        # Use timestamp_sgt (entry date) for the today filter, which is always
-        # written at trade placement time and is always SGT. The 6-hour cooldown
-        # then counts from closed_at_sgt if available, else now_sgt.
+        # v6.2 FIX: check EITHER entry date OR close date against today.
+        # v6.1 only checked entry date (timestamp_sgt) to dodge a timezone issue,
+        # but that broke overnight-held wins: a trade entered Jun 16 and closed
+        # Jun 17 has timestamp_sgt starting with "2026-06-16", which never matches
+        # today="2026-06-17" — so the lock silently never saw it as a win, and a
+        # re-entry 3 minutes later hit SL for -$99 (observed in live data).
+        # Checking both dates makes the lock catch same-day AND overnight wins.
         _last_win = next(
             (t for t in reversed(history)
              if t.get("status") == "FILLED"
              and isinstance(t.get("realized_pnl_usd"), (int, float))
              and t.get("realized_pnl_usd") > 0
-             and t.get("timestamp_sgt", "").startswith(today)),
+             and (
+                 t.get("timestamp_sgt", "").startswith(today)
+                 or (t.get("closed_at_sgt") or "").startswith(today)
+             )),
             None,
         )
         if _last_win:
