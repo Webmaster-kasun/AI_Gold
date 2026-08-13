@@ -19,8 +19,8 @@
   "pyramid_min_score": 5,
   "pyramid_sl_usd": 1.5,
   "pyramid_max_risk_usd": 50,
-  "max_trades_day": 1,
-  "max_wins_day": 1,
+  "max_trades_day": 999,
+  "max_wins_day": 2,
   "max_losing_trades_day": 1,
   "loss_streak_cooldown_min": 60,
   "exhaustion_atr_mult": 2.5,
@@ -60,7 +60,7 @@
   "telegram_show_margin": true,
   "xau_margin_rate_override": 0.05,
   "trading_day_start_hour_sgt": 8,
-  "max_losing_trades_session": 2,
+  "max_losing_trades_session": 1,
   "midnight_guard_min": 0,
   "max_trades_london": 10,
   "max_trades_us": 10,
@@ -96,8 +96,9 @@
   "require_candle_close": true,
   "sl_direction_cooldown_min": 180,
   "post_win_candle_block": true,
-  "post_win_cooldown_hours": 6,
+  "post_win_cooldown_hours": 4,
   "ai_reasoning": true,
   "h4_ema_buffer_pct": 0.15,
-  "ai_scale_after_loss": false
+  "ai_scale_after_loss": false,
+  "position_second_trade_usd": 86
 }
